@@ -126,6 +126,18 @@ def delete_path():
     else:
         os.remove(abs_path)
         return jsonify({"message": f"File deleted: {path}"})
+
+@app.route('/ping', methods=['GET', 'OPTIONS'])
+def ping():
+    if request.method == 'OPTIONS':
+        # 预检请求处理
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+    return jsonify({"message": "Server is online"}), 200
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='File Management API')
     parser.add_argument('-workpath', required=True, help='Working directory path')
