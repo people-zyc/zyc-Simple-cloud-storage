@@ -1,41 +1,61 @@
 import os
 import argparse
 import shutil
+import base64
 from flask import Flask, request, jsonify, abort, make_response
 from flask_cors import CORS
+
 app = Flask(__name__)
 CORS(app)  # 允许所有来源的跨域请求
 WORK_PATH = None
 API_PASSWORD = None  # 密码将在启动时设置
+
 def secure_path(user_path):
     abs_path = os.path.abspath(os.path.join(WORK_PATH, user_path.lstrip('/')))
     if not abs_path.startswith(WORK_PATH):
         abort(403, description="Path traversal attempt detected")
     return abs_path
+
 @app.before_request
 def check_password():
     if request.method == 'OPTIONS':
         return
 
     if request.endpoint in ['list_directory', 'create_file', 'write_file', 'read_file', 'delete_path']:
-        if 'passwd' not in request.args or request.args.get('passwd') != API_PASSWORD:
+        # 从请求体获取JSON数据
+        data = request.get_json(silent=True) or {}
+        encoded_password = data.get('password')
+        
+        if not encoded_password:
+            return make_response(jsonify({"error": "Missing password in request body"}), 401)
+            
+        try:
+            # Base64解码
+            decoded_password = base64.b64decode(encoded_password).decode('utf-8')
+        except:
+            return make_response(jsonify({"error": "Invalid password encoding"}), 401)
+            
+        if decoded_password != API_PASSWORD:
             return make_response(jsonify({"error": "Unauthorized"}), 401)
 
-@app.route('/files', methods=['GET', 'OPTIONS'])
+@app.route('/files', methods=['POST', 'OPTIONS'])  # 改为POST方法
 def list_directory():
     if request.method == 'OPTIONS':
-        # 预检请求处理
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
-    path = request.args.get('path', '')
+        
+    data = request.get_json()
+    path = data.get('path', '')  # 从请求体获取path
     abs_path = secure_path(path)
+    
     if not os.path.exists(abs_path):
         return jsonify({"error": "Directory not found"}), 404
     if not os.path.isdir(abs_path):
         return jsonify({"error": "Not a directory"}), 400
+    
     contents = []
     for item in os.listdir(abs_path):
         item_path = os.path.join(abs_path, item)
@@ -48,6 +68,7 @@ def list_directory():
             "size": os.path.getsize(item_path) if item_type == 'file' else 0
         })
     return jsonify({"path": path, "contents": contents})
+
 @app.route('/files', methods=['POST', 'OPTIONS'])
 def create_file():
     if request.method == 'OPTIONS':
@@ -56,14 +77,17 @@ def create_file():
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
+        
     data = request.json
     file_path = data.get('path')
     if not file_path:
         return jsonify({"error": "Missing file path"}), 400
+        
     abs_path = secure_path(file_path)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
     open(abs_path, 'w').close()
     return jsonify({"message": f"File created: {file_path}"}), 201
+
 @app.route('/files/content', methods=['PUT', 'OPTIONS'])
 def write_file():
     if request.method == 'OPTIONS':
@@ -72,40 +96,48 @@ def write_file():
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
+        
     data = request.json
     file_path = data.get('path')
     content = data.get('content', '')
     if not file_path:
         return jsonify({"error": "Missing file path"}), 400
+        
     abs_path = secure_path(file_path)
     if os.path.exists(abs_path) and os.path.isdir(abs_path):
         return jsonify({"error": "Cannot write to a directory"}), 400
+        
     with open(abs_path, 'w') as f:
         f.write(content)
     return jsonify({"message": f"Content written to {file_path}"})
-@app.route('/files/content', methods=['GET', 'OPTIONS'])
+
+@app.route('/files/content', methods=['POST', 'OPTIONS'])  # 改为POST方法
 def read_file():
     if request.method == 'OPTIONS':
-        # 预检请求处理
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
-    file_path = request.args.get('path')
+        
+    data = request.get_json()
+    file_path = data.get('path')  # 从请求体获取path
     if not file_path:
         return jsonify({"error": "Missing file path"}), 400
+        
     abs_path = secure_path(file_path)
     if not os.path.exists(abs_path):
         return jsonify({"error": "File not found"}), 404
     if os.path.isdir(abs_path):
         return jsonify({"error": "Cannot read directory content"}), 400
+        
     with open(abs_path, 'r') as f:
         content = f.read()
     return jsonify({
         "path": file_path,
         "content": content
     })
+
 @app.route('/files', methods=['DELETE', 'OPTIONS'])
 def delete_path():
     if request.method == 'OPTIONS':
@@ -114,12 +146,16 @@ def delete_path():
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
-    path = request.json.get('path')
+        
+    data = request.json
+    path = data.get('path')
     if not path:
         return jsonify({"error": "Missing path"}), 400
+        
     abs_path = secure_path(path)
     if not os.path.exists(abs_path):
         return jsonify({"error": "Path not found"}), 404
+        
     if os.path.isdir(abs_path):
         shutil.rmtree(abs_path)
         return jsonify({"message": f"Directory deleted: {path}"})
@@ -130,7 +166,6 @@ def delete_path():
 @app.route('/ping', methods=['GET', 'OPTIONS'])
 def ping():
     if request.method == 'OPTIONS':
-        # 预检请求处理
         response = make_response()
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
